@@ -143,7 +143,7 @@ async def send_request(
     request_start_time = time.time()
     headers = {'Content-Type': 'application/json'}
     headers = {"User-Agent": "Benchmark Client"}
-    url = 'http://localhost:8000/generate'
+    url = 'http://localhost:12345/generate'
       
     data = {
         'inputs': prompt,

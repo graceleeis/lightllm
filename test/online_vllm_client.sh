@@ -1,0 +1,2 @@
+#!/bin/bash
+python benchmark_serving_vllm.py --backend vllm --tokenizer meta-llama/Llama-2-7b-chat-hf --dataset ShareGPT_V3_unfiltered_cleaned_split.json --request-rate 200 --port 12346 --host 0.0.0.0 

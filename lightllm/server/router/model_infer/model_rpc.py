@@ -44,7 +44,8 @@ class ModelRpcServer(rpyc.Service):
         model_cfg, _ = PretrainedConfig.get_config_dict(
             weight_dir
         )
-
+        #if self.tp_rank ==0:
+            #import ipdb; ipdb.set_trace()
         try:
             self.model_type = model_cfg["model_type"]
             if self.model_type == "bloom":
@@ -75,7 +76,7 @@ class ModelRpcServer(rpyc.Service):
             print("#" * 16)
             print("load model error:", str(e), e, type(e))
             raise e
-        
+
         set_random_seed(2147483647)
         return
     # @calculate_time(show=True, min_cost_ms=0.1)
@@ -90,7 +91,7 @@ class ModelRpcServer(rpyc.Service):
         batch_data = InferBatch.init_batch(batch_id, reqs, dtype, torch.cuda.current_device(), self.model.mem_manager, self.model.vocab_size)
         self.cache[batch_id] = batch_data
         return
-    
+
     @calculate_time(show=False, min_cost_ms=300)
     def exposed_prefill_batch(self, batch_id):
         return self.forward(batch_id, is_prefill=True)
@@ -127,7 +128,7 @@ class ModelRpcServer(rpyc.Service):
         del batch
         # torch.cuda.empty_cache()
         return
-    
+
     # @calculate_time(show=True, min_cost_ms=150)
     def forward(self, batch_id, is_prefill):
         batch: InferBatch = self.cache.pop(batch_id)
@@ -149,7 +150,7 @@ class ModelRpcServer(rpyc.Service):
         next_token_ids = next_token_ids.detach().cpu().numpy()
         next_token_logprobs = torch.log(next_token_probs).detach().cpu().numpy()
         output_dict = {}
-        new_input_ids = []        
+        new_input_ids = []
         for i, (r, all_input_ids, next_token_id, next_token_logprob) in enumerate(zip(batch.requests, batch.all_input_ids, next_token_ids, next_token_logprobs)):
             # all_input_ids_tensor = torch.tensor(all_input_ids, dtype=torch.long, device="cuda")
             all_input_ids.append(int(next_token_id))
@@ -163,7 +164,7 @@ class ModelRpcServer(rpyc.Service):
                 'logprob': float(next_token_logprob),
             }
             output_dict[r['request_id']] = (int(next_token_id), metadata)
-        
+
         batch.input_ids = torch.tensor(new_input_ids, dtype=torch.long).cuda()
         batch.nopad_b_start_loc = batch.nopad_b_start_loc + torch.arange(0, len(batch), dtype=torch.int32, device="cuda")
         batch.nopad_total_token_num += len(batch)
@@ -184,7 +185,8 @@ class ModelRpcClient:
                 f = rpyc.async_(f)
                 async def _func(*args, **kwargs):
                     ans = f(*args, **kwargs)
-                    await asyncio.to_thread(ans.wait)
+                    #await asyncio.to_thread(ans.wait)
+                    await asyncio.get_running_loop().run_in_executor(None, ans.wait)
                     # raise if exception
                     return ans.value
                 return _func
@@ -241,7 +243,7 @@ class ModelRpcClient:
             await ans
             return
         else:
-            return 
+            return
 
     async def merge_batch(self, batch_id1, batch_id2):
         ans = self._merge_batch(batch_id1, batch_id2)
@@ -271,7 +273,7 @@ async def start_model_process(port, world_size):
     # 单卡时不使用 rpc
     if world_size == 1:
         return ModelRpcClient(ModelRpcServer(), world_size)
-    
+
     import multiprocessing
     proc = multiprocessing.Process(target=_init_env, args=(port,))
     proc.start()
