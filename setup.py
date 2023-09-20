@@ -16,7 +16,7 @@ setup(
         "Programming Language :: Python :: 3",
         "Operating System :: Linux",
     ],
-    python_requires=">=3.9",
+    python_requires=">=3.8",
     install_requires=[
         "pyzmq",
         "uvloop",

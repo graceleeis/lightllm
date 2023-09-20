@@ -196,7 +196,8 @@ class ModelRpcClient:
                 f = rpyc.async_(f)
                 async def _func(*args, **kwargs):
                     ans = f(*args, **kwargs)
-                    await asyncio.to_thread(ans.wait)
+                    #await asyncio.to_thread(ans.wait)
+                    await asyncio.get_running_loop().run_in_executor(None, ans.wait)
                     # raise if exception
                     return ans.value
                 return _func
