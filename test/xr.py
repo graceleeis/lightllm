@@ -19,6 +19,7 @@ from lightllm.server.httpserver.manager import HttpServerManager
 from lightllm.server.sampling_params import SamplingParams as LightLLMSamplingParams
 from lightllm.server.router.manager import start_router_process
 from lightllm.server.detokenization.manager import start_detokenization_process
+from lightllm.utils.net_utils import alloc_can_use_network_port
 import multiprocessing as mp
 
 # python xr.py --backend lightllm --model_dir /home/aiscuser/models/Llama-2-7b-chat-hf -
@@ -80,14 +81,6 @@ def sample_requests(
 
 async def run_lightllm(
     requests: List[Tuple[str, int, int]],
-    model_dir: str,
-    n: int,
-    use_beam_search: bool,
-    max_total_token_num: int,
-    max_req_input_len: int,
-    max_req_total_len: int,
-    tokenizer_mode: str = "auto",
-    tp: int = 1,
 ) -> float:
 
     global isFirst
@@ -95,58 +88,24 @@ async def run_lightllm(
         loop = asyncio.get_event_loop()
         loop.create_task(httpserver_manager.handle_loop())
         isFirst = False
+
     start = time.time()
-
     final_output = []
-    # import ipdb; ipdb.set_trace()
-    # prompt = "Hello, how are you?"
-    # request_id = uuid.uuid4().hex
-    # results_generator = [item async for item in httpserver_manager.generate(prompt, sampling_params, request_id)]
-    # for request_output, metadata in results_generator:
-    #         print(f"Received result: {request_output}")
-    #         ret = {
-    #             "token": {
-    #                 "id": metadata.get('id', None),
-    #                 "text": request_output,
-    #                 "logprob": metadata.get('logprob', None),
-    #                 "special": False
-    #             },
-    #             "generated_text": None,
-    #             "details": None
-    #         }
-    #         # final_output.append(ret)
-    #         final_output.append(request_output)
-
-    import ipdb; ipdb.set_trace()
     for prompt, _, output_len in requests:
         sampling_params = LightLLMSamplingParams(
             do_sample = False,
-            # temperature=0.0 if use_beam_search else 1.0,
-            # top_p=1.0,
             ignore_eos=True,
             max_new_tokens=output_len,
         )
         sampling_params.verify()
         request_id = f"chatcmpl-{uuid.uuid4().hex}"
         results_generator = [item async for item in httpserver_manager.generate(prompt, sampling_params, request_id)]
-        # results_generator = httpserver_manager.generate(prompt, sampling_params, request_id)
-        for request_output, metadata in results_generator:
-            print(f"Received result: {request_output}")
-            ret = {
-                "token": {
-                    "id": metadata.get('id', None),
-                    "text": request_output,
-                    "logprob": metadata.get('logprob', None),
-                    "special": False
-                },
-                "generated_text": None,
-                "details": None
-            }
-            final_output.append(ret)
-            # final_output.append(request_output)
+        for request_output, metadata, _  in results_generator:
+            # print(f"Received result: {request_output}")
+            final_output.append(request_output)
 
     assert final_output is not None
-    ret = {"generated_text": ["".join(final_output)]}
+    # ret = {"generated_text": ["".join(final_output)]}
 
     end = time.time()
     return end - start
@@ -209,12 +168,8 @@ def main(args: argparse.Namespace):
             args.seed, args.n, args.use_beam_search, args.trust_remote_code)
     elif args.backend == "lightllm":
         global httpserver_manager
-        router_port = 23456
-        detokenization_port = 23480
-        model_rpc_ports = [23458]
-        httpserver_port = 12345
         args = parser.parse_args()
-        args.tp = 1
+        args.nccl_port = 28765
         args.tokenizer_mode = "slow"
         args.batch_max_tokens = args.max_req_total_len
         args.running_max_req_size = 1000
@@ -222,10 +177,16 @@ def main(args: argparse.Namespace):
         args.disable_log_stats = True
         args.log_stats_interval = 10
         args.trust_remote_code = False
+        can_use_ports = alloc_can_use_network_port(
+            num=3 + args.tp, used_nccl_port=args.nccl_port
+        )
+        router_port, detokenization_port, httpserver_port = can_use_ports[0:3]
+        model_rpc_ports = can_use_ports[3:]
+
         httpserver_manager = HttpServerManager(args.model_dir,
                                            "auto",
-                                           router_port=23456,
-                                           httpserver_port=12345,
+                                           router_port=router_port,
+                                           httpserver_port=httpserver_port,
                                            total_token_num=args.max_total_token_num,
                                            max_req_input_len=args.max_req_input_len,
                                            max_req_total_len=args.max_req_total_len,
@@ -251,9 +212,7 @@ def main(args: argparse.Namespace):
 
         assert proc_router.is_alive() and proc_detoken.is_alive()
 
-        elapsed_time = asyncio.run(run_lightllm(
-            requests, args.model_dir, args.n, args.use_beam_search,
-            args.max_total_token_num, args.max_req_input_len, args.max_req_total_len))
+        elapsed_time = asyncio.run(run_lightllm(requests))
     else:
         raise ValueError(f"Unknown backend: {args.backend}")
     total_num_tokens = sum(
@@ -274,7 +233,8 @@ if __name__ == "__main__":
     parser.add_argument("--model", type=str, default="facebook/opt-125m")
     parser.add_argument("--model_dir", type=str, default=None)
     parser.add_argument("--tokenizer", type=str, default=None)
-    parser.add_argument("--tensor-parallel-size", "-tp", type=int, default=1)
+    # parser.add_argument("--tensor-parallel-size", "-tp", type=int, default=1)
+    parser.add_argument("--tp", "-tensor-parallel-size", type=int, default=1)
     parser.add_argument("--n", type=int, default=1,
                         help="Number of generated sequences per prompt.")
     parser.add_argument("--use-beam-search", action="store_true")
