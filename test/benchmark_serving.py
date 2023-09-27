@@ -31,6 +31,8 @@ from transformers import AutoModelForCausalLM, PreTrainedTokenizerBase
 from transformers import (AutoTokenizer, PreTrainedTokenizer,
                           PreTrainedTokenizerFast)
 
+outputs = []
+
 def get_tokenizer(
     tokenizer_name: str,
     tokenizer_mode: str = "auto",
@@ -82,14 +84,15 @@ def sample_requests(
         (data["conversations"][0]["value"], data["conversations"][1]["value"])
         for data in dataset
     ]
-    
+
     print("read data set finish")
+
     # Tokenize the prompts and completions.
     import random
     dataset = random.sample(dataset, num_requests * 3)
     prompts = [prompt for prompt, _ in dataset]
     completions = [completion for _, completion in dataset]
-    
+
     prompt_token_ids = tokenizer(prompts).input_ids
     completion_token_ids = tokenizer(completions).input_ids
     tokenized_dataset = []
@@ -143,8 +146,8 @@ async def send_request(
     request_start_time = time.time()
     headers = {'Content-Type': 'application/json'}
     headers = {"User-Agent": "Benchmark Client"}
-    url = 'http://localhost:8000/generate'
-      
+    url = 'http://127.0.0.1:12345/generate'
+
     data = {
         'inputs': prompt,
         'parameters': {
@@ -154,7 +157,7 @@ async def send_request(
              # 'temperature': 0.1,
         }
     }
-       
+
 
     timeout = aiohttp.ClientTimeout(total=3 * 3600)
     async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -165,7 +168,8 @@ async def send_request(
                     chunks.append(chunk)
             output = b"".join(chunks).decode("utf-8")
             output = json.loads(output)
-            
+            outputs.append({"result": output["generated_text"][0]})
+
             if "error" not in output:
                 break
 
@@ -186,6 +190,20 @@ async def benchmark(
         tasks.append(task)
     await asyncio.gather(*tasks)
 
+def post_process(REQUEST_LATENCY:REQUEST_LATENCY):
+    prompt_output_lens = 0
+    output_lens = 0
+
+    for prompt_len, output_len, latency in REQUEST_LATENCY:
+        prompt_output_lens += prompt_len + output_len
+        output_lens += output_len
+
+    return prompt_output_lens, output_lens
+
+def remove_suffix(input_string, suffix):
+    if suffix and input_string.endswith(suffix):
+        return input_string[:-len(suffix)]
+    return input_string
 
 def main(args: argparse.Namespace):
     print(args)
@@ -215,6 +233,17 @@ def main(args: argparse.Namespace):
     ])
     print("Average latency per output token: "
           f"{avg_per_output_token_latency:.2f} s")
+
+    # prompt_output_lens, output_lens = post_process(REQUEST_LATENCY)
+    total_tokens = 0
+
+    for output in outputs:
+        result = remove_suffix(output["result"],"</s>")
+        total_tokens += len(tokenizer(result).input_ids)
+    # print("all tokens throughput: "
+    #       f"{prompt_output_lens / benchmark_time:.2f} tokens/ s")
+    print("output tokens throughput: "
+            f"{total_tokens / benchmark_time:.2f} tokens/ s")
 
 
 if __name__ == "__main__":
